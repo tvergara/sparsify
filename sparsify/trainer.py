@@ -3,6 +3,7 @@ from dataclasses import asdict
 from fnmatch import fnmatchcase
 from typing import Sized
 from glob import glob
+import shutil
 
 import torch
 import torch.distributed as dist
@@ -83,7 +84,7 @@ class Trainer:
                     input_widths[hook], cfg.sae, device, dtype=torch.float32
                 )
         base_lr = {
-            'signum': 3e-3,
+            'signum': 5e-3,
             'adam': 2e-4,
         }[cfg.optimizer]
 
@@ -118,7 +119,7 @@ class Trainer:
                 self.optimizer, cfg.lr_warmup_steps, num_examples // cfg.batch_size
             )
         else:
-            self.optimizer = ScheduleFreeWrapper(SignSGD(pgs))
+            self.optimizer = ScheduleFreeWrapper(SignSGD(pgs), momentum=0.95)
             self.optimizer.train()
             self.lr_scheduler = None
             
@@ -131,6 +132,7 @@ class Trainer:
         num_latents = list(self.saes.values())[0].num_latents
         self.initial_k = min(num_latents, round(list(input_widths.values())[0] * 10))
         self.final_k = self.cfg.sae.k
+        self.best_loss = float('inf')
 
 
     def load_state(self, path: str):
@@ -436,6 +438,14 @@ class Trainer:
 
                 if (step + 1) % self.cfg.save_every == 0:
                     self.save()
+
+                    if rank_zero and loss < self.best_loss:
+                        self.best_loss = loss
+
+                        # Copy the checkpoint to a best/ directory
+                        path = self.cfg.run_name or "sae-ckpts"
+                        best_path = f"{path}/best"
+                        shutil.copytree(path, best_path, dirs_exist_ok=True)
 
             self.global_step += 1
             pbar.update()
