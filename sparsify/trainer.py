@@ -9,6 +9,7 @@ import torch.distributed as dist
 from datasets import Dataset as HfDataset
 from natsort import natsorted
 from safetensors.torch import load_model
+from schedulefree import ScheduleFreeWrapper
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
@@ -17,6 +18,7 @@ from transformers import PreTrainedModel, get_linear_schedule_with_warmup
 
 from .config import TrainConfig
 from .data import MemmapDataset
+from .sign_sgd import SignSGD
 from .sparse_coder import SparseCoder
 from .utils import get_layer_list, resolve_widths
 
@@ -43,19 +45,17 @@ class Trainer:
             # If no layers are specified, train on all of them
             if not cfg.layers:
                 N = model.config.num_hidden_layers
-                cfg.layers = list(range(0, N, cfg.layer_stride))
+                cfg.layers = list(range(0, N))
 
             # Now convert layers to hookpoints
             layers_name, _ = get_layer_list(model)
             cfg.hookpoints = [f"{layers_name}.{i}" for i in cfg.layers]
 
+        cfg.hookpoints = cfg.hookpoints[:: cfg.layer_stride]
+
         self.cfg = cfg
         self.dataset = dataset
-        self.distribute_modules()
-
-        N = len(cfg.hookpoints)
-        assert isinstance(dataset, Sized)
-        num_examples = len(dataset)
+        self.distribute_modules()   
 
         device = model.device
         input_widths = resolve_widths(model, cfg.hookpoints)
@@ -82,12 +82,16 @@ class Trainer:
                 self.saes[name] = SparseCoder(
                     input_widths[hook], cfg.sae, device, dtype=torch.float32
                 )
+        base_lr = {
+            'signum': 3e-3,
+            'adam': 2e-4,
+        }[cfg.optimizer]
 
         pgs = [
             {
                 "params": sae.parameters(),
                 # Auto-select LR using 1 / sqrt(d) scaling law from Fig 3 of the paper
-                "lr": cfg.lr or 2e-4 / (sae.num_latents / (2**14)) ** 0.5,
+                "lr": cfg.lr or base_lr / (sae.num_latents / (2**14)) ** 0.5,
             }
             for sae in self.saes.values()
         ]
@@ -95,29 +99,39 @@ class Trainer:
         lrs = [f"{lr:.2e}" for lr in sorted(set(pg["lr"] for pg in pgs))]
         print(f"Learning rates: {lrs}" if len(lrs) > 1 else f"Learning rate: {lrs[0]}")
 
-        try:
-            from bitsandbytes.optim import Adam8bit as Adam
+        if cfg.optimizer == 'adam':
+            try:
+                from bitsandbytes.optim import Adam8bit as Adam
 
-            print("Using 8-bit Adam from bitsandbytes")
-        except ImportError:
-            from torch.optim import Adam
+                print("Using 8-bit Adam from bitsandbytes")
+            except ImportError:
+                from torch.optim import Adam
 
-            print("bitsandbytes 8-bit Adam not available, using torch.optim.Adam")
-            print("Run `pip install bitsandbytes` for less memory usage.")
+                print("bitsandbytes 8-bit Adam not available, using torch.optim.Adam")
+                print("Run `pip install bitsandbytes` for less memory usage.")
 
+            assert isinstance(dataset, Sized)
+            num_examples = len(dataset)
+
+            self.optimizer = Adam(pgs)
+            self.lr_scheduler = get_linear_schedule_with_warmup(
+                self.optimizer, cfg.lr_warmup_steps, num_examples // cfg.batch_size
+            )
+        else:
+            self.optimizer = ScheduleFreeWrapper(SignSGD(pgs))
+            self.optimizer.train()
+            self.lr_scheduler = None
+            
         self.global_step = 0
         self.num_tokens_since_fired = {
             name: torch.zeros(sae.num_latents, device=device, dtype=torch.long)
             for name, sae in self.saes.items()
         }
-        self.optimizer = Adam(pgs)
-        self.lr_scheduler = get_linear_schedule_with_warmup(
-            self.optimizer, cfg.lr_warmup_steps, num_examples // cfg.batch_size
-        )
 
         num_latents = list(self.saes.values())[0].num_latents
         self.initial_k = min(num_latents, round(list(input_widths.values())[0] * 10))
         self.final_k = self.cfg.sae.k
+
 
     def load_state(self, path: str):
         """Load the trainer state from disk."""
@@ -131,27 +145,31 @@ class Trainer:
 
         for file in glob(f"{path}/rank_*_state.pt"):
             rank_train_state = torch.load(file, map_location=device)
-            train_state["num_tokens_since_fired"].update(rank_train_state["num_tokens_since_fired"])
-
+            train_state["num_tokens_since_fired"].update(
+                rank_train_state["num_tokens_since_fired"]
+            )
 
         self.global_step = train_state["global_step"]
         self.num_tokens_since_fired = {
-            k: train_state["num_tokens_since_fired"][k]
-            for k in self.local_hookpoints()
+            k: train_state["num_tokens_since_fired"][k] for k in self.local_hookpoints()
         }
 
         print(
             f"\033[92mResuming training at step {self.global_step} from '{path}'\033[0m"
         )
 
-        lr_state = torch.load(
-            f"{path}/lr_scheduler.pt", map_location=device, weights_only=True
-        )
+        if self.lr_scheduler is not None:
+            lr_state = torch.load(
+                f"{path}/lr_scheduler.pt", map_location=device, weights_only=True
+            )
+            self.lr_scheduler.load_state_dict(lr_state)
+
         opt_state = torch.load(
             f"{path}/optimizer.pt", map_location=device, weights_only=True
         )
         self.optimizer.load_state_dict(opt_state)
-        self.lr_scheduler.load_state_dict(lr_state)
+        if self.cfg.optimizer == "signum":
+            self.optimizer.train()
 
         for name, sae in self.saes.items():
             load_model(sae, f"{path}/{name}/sae.safetensors", device=str(device))
@@ -163,7 +181,6 @@ class Trainer:
         
         progress = self.global_step / self.cfg.k_decay_steps
         return round(self.initial_k * (1 - progress) + self.final_k * progress)
-    
     
     def fit(self):
         # Use Tensor Cores even for fp32 matmuls
@@ -350,9 +367,6 @@ class Trainer:
                     did_fire[name][out.latent_indices.flatten()] = True
                     self.maybe_all_reduce(did_fire[name], "max")  # max is boolean "any"
 
-                # Clip gradient norm independently for each sparse coder
-                torch.nn.utils.clip_grad_norm_(raw.parameters(), 1.0)
-
             # Check if we need to actually do a training step
             step, substep = divmod(self.global_step + 1, self.cfg.grad_acc_steps)
             if substep == 0:
@@ -362,7 +376,8 @@ class Trainer:
 
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                self.lr_scheduler.step()
+                if self.lr_scheduler is not None:
+                    self.lr_scheduler.step()
 
                 k = self.get_current_k()
                 for name, sae in self.saes.items():
@@ -527,8 +542,16 @@ class Trainer:
             torch.save({"num_tokens_since_fired": self.num_tokens_since_fired}, f"{path}/rank_{rank}_state.pt")
 
         if rank_zero:
-            torch.save(self.lr_scheduler.state_dict(), f"{path}/lr_scheduler.pt")
-            torch.save(self.optimizer.state_dict(), f"{path}/optimizer.pt")
+            if self.lr_scheduler is not None:
+                torch.save(self.lr_scheduler.state_dict(), f"{path}/lr_scheduler.pt")
+            
+            if self.cfg.optimizer == "signum":
+                self.optimizer.eval()
+                torch.save(self.optimizer.state_dict(), f"{path}/optimizer.pt")
+                self.optimizer.train()
+            else:
+                torch.save(self.optimizer.state_dict(), f"{path}/optimizer.pt")
+            
             torch.save({"global_step": self.global_step}, f"{path}/state.pt")
 
             self.cfg.save_json(f"{path}/config.json")
@@ -536,7 +559,6 @@ class Trainer:
         # Barrier to ensure all ranks have saved before continuing
         if dist.is_initialized():
             dist.barrier()
-
 
 # Support old name for compatibility
 SaeTrainer = Trainer

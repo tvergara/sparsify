@@ -45,7 +45,7 @@ TranscoderConfig = partial(SparseCoderConfig, transcode=True)
 class TrainConfig(Serializable):
     sae: SparseCoderConfig
 
-    batch_size: int = 8
+    batch_size: int = 32
     """Batch size measured in sequences."""
 
     grad_acc_steps: int = 1
@@ -54,11 +54,15 @@ class TrainConfig(Serializable):
     micro_acc_steps: int = 1
     """Chunk the activations into this number of microbatches for training."""
 
+    optimizer: Literal["adam", "signum"] = "signum"
+    """Optimizer to use."""
+
     lr: float | None = None
     """Base LR. If None, it is automatically chosen based on the number of latents."""
 
     lr_warmup_steps: int = 1000
-    """Number of steps over which to warm up the learning rate."""
+    """Number of steps over which to warm up the learning rate. Only used if
+    `optimizer` is `adam`."""
 
     k_decay_steps: int = 0
     """Number of steps over which to decay the number of active latents. Starts at
