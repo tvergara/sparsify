@@ -3,7 +3,6 @@ from dataclasses import asdict
 from fnmatch import fnmatchcase
 from typing import Sized
 from glob import glob
-import shutil
 
 import torch
 import torch.distributed as dist
@@ -436,21 +435,20 @@ class Trainer:
 
                         wandb.log(info, step=step)
 
-                if (step + 1) % self.cfg.save_every == 0:
+                if (
+                    (step + 1) % self.cfg.save_every == 0
+                    and loss < self.best_loss
+                ):
+                    self.best_loss = loss
                     self.save()
-
-                    if rank_zero and loss < self.best_loss:
-                        self.best_loss = loss
-
-                        # Copy the checkpoint to a best/ directory
-                        path = self.cfg.run_name or "sae-ckpts"
-                        best_path = f"{path}/best"
-                        shutil.copytree(path, best_path, dirs_exist_ok=True)
 
             self.global_step += 1
             pbar.update()
 
-        self.save()
+        if loss < self.best_loss:
+            self.best_loss = loss
+            self.save()
+
         pbar.close()
 
     def local_hookpoints(self) -> list[str]:
