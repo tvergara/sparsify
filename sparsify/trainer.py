@@ -438,29 +438,16 @@ class Trainer:
                         wandb.log(info, step=step)
 
                 if (step + 1) % self.cfg.save_every == 0:
-                    self.save()
-
                     if rank_zero and loss < self.best_loss:
                         self.best_loss = loss
-
-                        # Copy the checkpoint to a best/ directory
-                        path = Path(self.cfg.run_name or "sae-ckpts")
-                        best_path = path / "best"
-                        best_path.mkdir(exist_ok=True)
-
-                        for file_path in path.glob("*"):
-                            if file_path.name == "best":
-                                continue
-                            if file_path.is_file():
-                                shutil.copy2(file_path, best_path)
-                            elif file_path.is_dir():
-                                dest_dir = best_path / file_path.name
-                                shutil.copytree(file_path, dest_dir, dirs_exist_ok=True)
+                        self.save()
 
             self.global_step += 1
             pbar.update()
 
-        self.save()
+        if rank_zero and loss < self.best_loss:
+            self.best_loss = loss
+            self.save()
         pbar.close()
 
     def local_hookpoints(self) -> list[str]:
