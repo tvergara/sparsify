@@ -3,8 +3,6 @@ from dataclasses import asdict
 from fnmatch import fnmatchcase
 from typing import Sized
 from glob import glob
-import shutil
-from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -437,17 +435,20 @@ class Trainer:
 
                         wandb.log(info, step=step)
 
-                if (step + 1) % self.cfg.save_every == 0:
-                    if rank_zero and loss < self.best_loss:
-                        self.best_loss = loss
-                        self.save()
+                if (
+                    (step + 1) % self.cfg.save_every == 0
+                    and loss < self.best_loss
+                ):
+                    self.best_loss = loss
+                    self.save()
 
             self.global_step += 1
             pbar.update()
 
-        if rank_zero and loss < self.best_loss:
+        if loss < self.best_loss:
             self.best_loss = loss
             self.save()
+
         pbar.close()
 
     def local_hookpoints(self) -> list[str]:
