@@ -137,6 +137,9 @@ class Trainer:
                 self.lr_schedulers = [
                     get_linear_schedule_with_warmup(
                         self.optimizers[0], 0, num_batches // cfg.batch_size
+                    ),
+                    get_linear_schedule_with_warmup(
+                        self.optimizers[1], cfg.lr_warmup_steps, num_batches // cfg.batch_size
                     )
                 ]
             case "signum":
@@ -573,7 +576,7 @@ class Trainer:
     def save(self):
         """Save the SAEs to disk."""
 
-        path = self.cfg.run_name or "sae-ckpts"
+        path = f'checkpoints/{self.cfg.run_name}' or "checkpoints/unnamed"
         rank_zero = not dist.is_initialized() or dist.get_rank() == 0
 
         for optimizer in self.optimizers:
