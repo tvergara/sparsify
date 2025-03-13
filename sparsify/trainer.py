@@ -136,10 +136,10 @@ class Trainer:
                 ]
                 self.lr_schedulers = [
                     get_linear_schedule_with_warmup(
-                        self.optimizers[0], 0, num_batches // cfg.batch_size
+                        self.optimizers[0], 0, num_batches
                     ),
                     get_linear_schedule_with_warmup(
-                        self.optimizers[1], cfg.lr_warmup_steps, num_batches // cfg.batch_size
+                        self.optimizers[1], cfg.lr_warmup_steps, num_batches
                     )
                 ]
             case "signum":
