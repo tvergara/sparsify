@@ -233,16 +233,20 @@ class Trainer:
         if self.cfg.log_to_wandb and rank_zero:
             try:
                 import wandb
-
+            except AttributeError:
+                print("WARNING: Weights & Biases is installed but has the wrong version.")
+                print("Please run `pip install -U wandb`.")
+                self.cfg.log_to_wandb = False
+            except ImportError:
+                print("Weights & Biases not installed, skipping logging.")
+                self.cfg.log_to_wandb = False
+            else:
                 wandb.init(
                     name=self.cfg.run_name,
                     project="sae",
                     config=asdict(self.cfg),
                     save_code=True,
                 )
-            except (AttributeError, ImportError):
-                print("Weights & Biases not installed, skipping logging.")
-                self.cfg.log_to_wandb = False
 
         num_sae_params = sum(
             p.numel() for s in self.saes.values() for p in s.parameters()
