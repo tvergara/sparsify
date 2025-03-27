@@ -35,6 +35,9 @@ class SparseCoderConfig(Serializable):
     transcode: bool = False
     """Whether we want to predict the output of a module given its input."""
 
+    freeze_encoder: bool = False
+    """Freeze the encoder weights."""
+
 
 # Support different naming conventions for the same configuration
 SaeConfig = SparseCoderConfig

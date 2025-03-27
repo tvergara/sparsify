@@ -29,6 +29,7 @@ class Trainer:
         cfg: TrainConfig,
         dataset: HfDataset | MemmapDataset,
         model: PreTrainedModel,
+        target_model: PreTrainedModel | None = None,
     ):
         if cfg.hookpoints:
             assert not cfg.layers, "Cannot specify both `hookpoints` and `layers`."
@@ -69,6 +70,7 @@ class Trainer:
             )
 
         self.model = model
+        self.target_model = target_model
 
         # Initialize all the SAEs
         print(f"Initializing SAEs with random seed(s) {cfg.init_seeds}")
@@ -292,22 +294,33 @@ class Trainer:
         name_to_module = {
             name: self.model.get_submodule(name) for name in self.cfg.hookpoints
         }
+        target_model_name_to_module = {
+            name: self.target_model.get_submodule(name) for name in self.cfg.hookpoints
+        }
         maybe_wrapped: dict[str, DDP] | dict[str, SparseCoder] = {}
         module_to_name = {v: k for k, v in name_to_module.items()}
 
-        def hook(module: nn.Module, inputs, outputs):
+        if self.target_model is not None:
+            target_model_name_to_module = {
+                name: self.target_model.get_submodule(name) for name in self.cfg.hookpoints
+            }
+            module_to_name = {**module_to_name, **{v: k for k, v in target_model_name_to_module.items()}}
+
+
+        def input_hook(module: nn.Module, inputs, __outputs):
             # Maybe unpack tuple inputs and outputs
             if isinstance(inputs, tuple):
                 inputs = inputs[0]
-            if isinstance(outputs, tuple):
-                outputs = outputs[0]
-
-            name = module_to_name[module]
-            output_dict[name] = outputs.flatten(0, 1)
-
             # Remember the inputs if we're training a transcoder
             if self.cfg.sae.transcode:
                 input_dict[name] = inputs.flatten(0, 1)
+
+        def output_hook(module: nn.Module, __inputs, outputs):
+            if isinstance(outputs, tuple):
+                outputs = outputs[0]
+            name = module_to_name[module]
+            output_dict[name] = outputs.flatten(0, 1)
+
 
         k = self.get_current_k()
         for name, sae in self.saes.items():
@@ -322,12 +335,24 @@ class Trainer:
             num_tokens_in_step += N
 
             # Forward pass on the model to get the next batch of activations
-            handles = [
-                mod.register_forward_hook(hook) for mod in name_to_module.values()
+            input_handles = [
+                mod.register_forward_hook(input_hook) for mod in name_to_module.values()
             ]
+
+            if self.target_model is not None:
+                output_handles = [
+                    mod.register_forward_hook(output_hook) for mod in name_to_module.values()
+                ]
+            else:
+                output_handles = [
+                    mod.register_forward_hook(output_hook) for mod in target_model_name_to_module.values()
+                ]
+            handles = input_handles + output_handles
             try:
                 with torch.no_grad():
                     self.model(batch["input_ids"].to(device))
+                    if self.target_model is not None:
+                        self.target_model(batch["input_ids"].to(device))
             finally:
                 for handle in handles:
                     handle.remove()
@@ -342,6 +367,7 @@ class Trainer:
                 hookpoint, _, _ = name.partition("/")
 
                 # 'inputs' is distinct from outputs iff we're transcoding
+                # or using a crosscoder
                 outputs = output_dict[hookpoint]
                 inputs = input_dict.get(name, outputs)
 
