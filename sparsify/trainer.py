@@ -3,6 +3,7 @@ from dataclasses import asdict
 from fnmatch import fnmatchcase
 from glob import glob
 from typing import Sized
+import importlib.util
 
 import torch
 import torch.distributed as dist
@@ -231,18 +232,32 @@ class Trainer:
 
         wandb = None
         if self.cfg.log_to_wandb and rank_zero:
-            try:
-                import wandb
-
-                wandb.init(
-                    name=self.cfg.run_name,
-                    project="sae",
-                    config=asdict(self.cfg),
-                    save_code=True,
-                )
-            except (AttributeError, ImportError):
+            if importlib.util.find_spec("wandb") is None:
                 print("Weights & Biases not installed, skipping logging.")
                 self.cfg.log_to_wandb = False
+            else:
+                try:
+                    import wandb
+                except AttributeError as e:
+                    print("WARNING: Weights & Biases is installed but likely has the wrong version, causing an import error:")
+                    print(f'> {e}')
+                    print("Please run `pip install -U wandb`.")
+                    self.cfg.log_to_wandb = False
+                else:
+                    try:
+                        wandb.init(
+                            name=self.cfg.run_name,
+                            project="sae",
+                            config=asdict(self.cfg),
+                            save_code=True,
+                        )
+                    except AttributeError as e:
+                        if repr(e) == "AttributeError(\"module 'wandb' has no attribute 'init'\")":
+                            print("WARNING: It seems like wandb is not installed but is present as a local directory.")
+                            print("Please install wandb if you want to use it. Otherwise, ignore this message.")
+                            self.cfg.log_to_wandb = False
+                        else:
+                            raise
 
         num_sae_params = sum(
             p.numel() for s in self.saes.values() for p in s.parameters()
