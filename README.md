@@ -133,7 +133,7 @@ If you'd like to help out with any of these, please feel free to open a PR! You 
 
 ## Development
 
-Run `pip install -e ".[dev]"` then `pre-commit install` to install the development dependencies.
+Run `pip install pre-commit` then `pre-commit install`.
 
 ## Experimental features
 

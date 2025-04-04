@@ -15,7 +15,7 @@ class SparseCoderConfig(Serializable):
     """Activation function to use."""
 
     expansion_factor: int = 32
-    """Multiple of the input dimension to use as the SAE dimension."""
+    """Multiple of the input dimension to use as the sparse coder dimension."""
 
     normalize_decoder: bool = True
     """Normalize the decoder weights to have unit norm."""
@@ -99,7 +99,10 @@ class TrainConfig(Serializable):
     """Store one copy of each sparse coder, instead of copying them across devices."""
 
     save_every: int = 1000
-    """Save SAEs every `save_every` steps."""
+    """Save sparse coders every `save_every` steps."""
+
+    save_best: bool = False
+    """Save the best checkpoint found for each hookpoint."""
 
     log_to_wandb: bool = True
     run_name: str | None = None
