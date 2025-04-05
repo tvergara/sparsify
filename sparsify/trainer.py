@@ -172,7 +172,15 @@ class Trainer:
         num_latents = list(self.saes.values())[0].num_latents
         self.initial_k = min(num_latents, round(list(input_widths.values())[0] * 10))
         self.final_k = self.cfg.sae.k
-        self.best_loss = float("inf")
+
+        if self.cfg.save_best:
+            self.best_loss = (
+                {name: float("inf") for name in self.local_hookpoints()}
+                if self.cfg.loss_fn == "fvu"
+                else float("inf")
+            )
+        else:
+            self.best_loss = None
 
     def load_state(self, path: str):
         """Load the trainer state from disk."""
@@ -286,7 +294,6 @@ class Trainer:
 
         acc_steps = self.cfg.grad_acc_steps * self.cfg.micro_acc_steps
         denom = acc_steps * self.cfg.wandb_log_frequency
-        loss = torch.inf
         num_tokens_in_step = 0
 
         # For logging purposes
@@ -295,6 +302,11 @@ class Trainer:
         avg_multi_topk_fvu = defaultdict(float)
         avg_ce = 0.0
         avg_kl = 0.0
+        avg_losses = (
+            {name: float("inf") for name in self.local_hookpoints()}
+            if self.cfg.loss_fn == "fvu"
+            else float("inf")
+        )
 
         if self.cfg.loss_fn == "ce":
             batch = next(iter(dl))
@@ -454,14 +466,18 @@ class Trainer:
                         ce.div(acc_steps).backward()
 
                         avg_ce += float(self.maybe_all_reduce(ce.detach()) / denom)
+
+                        avg_losses = avg_ce
                     case "kl":
                         dirty_lps = self.model(x).logits.log_softmax(dim=-1)
                         kl = -torch.sum(clean_probs * dirty_lps, dim=-1).mean()
                         kl.div(acc_steps).backward()
 
                         avg_kl += float(self.maybe_all_reduce(kl) / denom)
+                        avg_losses = avg_kl
                     case "fvu":
                         self.model(x)
+                        avg_losses = avg_fvu
                     case other:
                         raise ValueError(f"Unknown loss function '{other}'")
             finally:
@@ -541,16 +557,18 @@ class Trainer:
                         if wandb is not None:
                             wandb.log(info, step=step)
 
-                if (step + 1) % self.cfg.save_every == 0 and loss < self.best_loss:
-                    self.best_loss = loss
+                if (step + 1) % self.cfg.save_every == 0:
                     self.save()
+
+                    if self.cfg.save_best:
+                        self.save_best(avg_losses)
 
             self.global_step += 1
             pbar.update()
 
-        if loss < self.best_loss:
-            self.best_loss = loss
-            self.save()
+        self.save()
+        if self.cfg.save_best:
+            self.save_best(avg_losses)
 
         pbar.close()
 
@@ -604,10 +622,27 @@ class Trainer:
         for rank, modules in enumerate(self.module_plan):
             print(f"Rank {rank} modules: {modules}")
 
-    def save(self):
-        """Save the SAEs to disk."""
+    def save_best(self, avg_loss: float | dict[str, float]):
+        """Save individual sparse coders to disk if they have the lowest loss."""
+        base_path = f'{self.cfg.save_dir}/{self.cfg.run_name or "unnamed"}/best'
+        if type(avg_loss) == float:
+            if avg_loss < self.best_loss:  # type: ignore
+                self.best_loss = avg_loss  # type: ignore
+                self.save(base_path)
+        else:
+            for name in self.saes:
+                if avg_loss[name] < self.best_loss[name]:  # type: ignore
+                    self.best_loss[name] = avg_loss[name]  # type: ignore
+                    path = f"{base_path}/{name}"
+                    self.save(path, {name: self.saes[name]})
 
-        path = f'{self.cfg.save_dir}/{self.cfg.run_name or "unnamed"}'
+    def save(self, path: str | None = None, saes: dict[str, SparseCoder] | None = None):
+        """Save the SAEs to disk."""
+        if path is None:
+            path = f'{self.cfg.save_dir}/{self.cfg.run_name or "unnamed"}'
+        if saes is None:
+            saes = self.saes
+
         rank_zero = not dist.is_initialized() or dist.get_rank() == 0
 
         for optimizer in self.optimizers:
@@ -621,7 +656,7 @@ class Trainer:
                 if isinstance(optimizer, ScheduleFreeWrapper):
                     optimizer.eval()
 
-            for name, sae in self.saes.items():
+            for name, sae in saes.items():
                 assert isinstance(sae, SparseCoder)
 
                 sae.save_to_disk(f"{path}/{name}")
