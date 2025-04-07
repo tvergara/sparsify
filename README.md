@@ -147,8 +147,8 @@ GroupMax activation function:
 
 End-to-end training:
 
-```bash python -m sparsify gpt2 --hookpoints "h.*.attn" "h.*.mlp.act" --activation groupmax --loss_fn ce```
+```bash python -m sparsify gpt2 --hookpoints "h.*.attn" "h.*.mlp.act" --loss_fn ce```
 
 or 
 
-```bash python -m sparsify gpt2 --hookpoints "h.*.attn" "h.*.mlp.act" --activation groupmax --loss_fn kl```
+```bash python -m sparsify gpt2 --hookpoints "h.*.attn" "h.*.mlp.act" --loss_fn kl```
