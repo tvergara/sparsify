@@ -625,7 +625,7 @@ class Trainer:
     def save_best(self, avg_loss: float | dict[str, float]):
         """Save individual sparse coders to disk if they have the lowest loss."""
         base_path = f'{self.cfg.save_dir}/{self.cfg.run_name or "unnamed"}/best'
-        if type(avg_loss) == float:
+        if type(avg_loss) is float:
             if avg_loss < self.best_loss:  # type: ignore
                 self.best_loss = avg_loss  # type: ignore
                 self.save(base_path)
