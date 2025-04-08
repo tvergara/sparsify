@@ -371,7 +371,7 @@ class Trainer:
 
             # On the first iteration, initialize the encoder and decoder biases
             raw = self.saes[name]
-            if self.global_step == 0:
+            if self.global_step == 0 and not self.cfg.finetune:
                 # Ensure the preactivations are centered at initialization
                 # This is mathematically equivalent to Anthropic's proposal of
                 # subtracting the decoder bias
