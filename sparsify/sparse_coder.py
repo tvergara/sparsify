@@ -52,6 +52,11 @@ class SparseCoder(nn.Module):
         self.encoder = nn.Linear(d_in, self.num_latents, device=device, dtype=dtype)
         self.encoder.bias.data.zero_()
 
+        # Freeze encoder parameters if the flag is set
+        if self.cfg.freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+
         if decoder:
             # Transcoder initialization: use zeros
             if cfg.transcode:

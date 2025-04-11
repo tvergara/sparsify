@@ -69,10 +69,16 @@ class RunConfig(TrainConfig):
     )
     """Number of processes to use for preprocessing data"""
 
+    target_model: str | None = None
+    """Name of the model to predict its activations."""
+
+    target_revision: str | None = None
+    """Name of the revision to predict its activations."""
+
 
 def load_artifacts(
     args: RunConfig, rank: int
-) -> tuple[PreTrainedModel, Dataset | MemmapDataset]:
+) -> tuple[PreTrainedModel, Dataset | MemmapDataset, PreTrainedModel | None]:
     if args.load_in_8bit:
         dtype = torch.float16
     elif torch.cuda.is_bf16_supported():
@@ -94,6 +100,22 @@ def load_artifacts(
         torch_dtype=dtype,
         token=args.hf_token,
     )
+
+    if args.target_model:
+        target_model = AutoModel.from_pretrained(
+            args.target_model,
+            device_map={"": f"cuda:{rank}"},
+            quantization_config=(
+                BitsAndBytesConfig(load_in_8bit=args.load_in_8bit)
+                if args.load_in_8bit
+                else None
+            ),
+            revision=args.target_revision,
+            torch_dtype=dtype,
+            token=args.hf_token,
+        )
+    else:
+        target_model = None
 
     # For memmap-style datasets
     if args.dataset.endswith(".bin"):
@@ -134,7 +156,7 @@ def load_artifacts(
         if limit := args.max_examples:
             dataset = dataset.select(range(limit))
 
-    return model, dataset
+    return model, dataset, target_model
 
 
 def run():
@@ -160,17 +182,17 @@ def run():
     with nullcontext() if rank == 0 else redirect_stdout(None):
         # Awkward hack to prevent other ranks from duplicating data preprocessing
         if not ddp or rank == 0:
-            model, dataset = load_artifacts(args, rank)
+            model, dataset, target_model = load_artifacts(args, rank)
         if ddp:
             dist.barrier()
             if rank != 0:
-                model, dataset = load_artifacts(args, rank)
+                model, dataset, target_model = load_artifacts(args, rank)
             dataset = dataset.shard(dist.get_world_size(), rank)
 
         print(f"Training on '{args.dataset}' (split '{args.split}')")
         print(f"Storing model weights in {model.dtype}")
 
-        trainer = Trainer(args, dataset, model)
+        trainer = Trainer(args, dataset, model, target_model=target_model)
         if args.resume:
             trainer.load_state(f"checkpoints/{args.run_name}" or "checkpoints/unnamed")
         elif args.finetune:
