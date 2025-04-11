@@ -373,7 +373,7 @@ class Trainer:
             inputs = inputs.flatten(0, 1) if self.cfg.sae.transcode else outputs
 
             if self.target_model:
-                layer = int(name.split('.')[1]) + 1
+                layer = int(name.split(".")[1]) + 1
                 outputs = self.target_activations[layer].flatten(0, 1)
 
             # On the first iteration, initialize the encoder and decoder biases
@@ -464,7 +464,9 @@ class Trainer:
 
             if self.target_model:
                 with torch.no_grad():
-                    self.target_activations = self.target_model(x, output_hidden_states=True).hidden_states
+                    self.target_activations = self.target_model(
+                        x, output_hidden_states=True
+                    ).hidden_states
 
             # Forward pass on the model to get the next batch of activations
             handles = [

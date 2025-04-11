@@ -102,21 +102,20 @@ def load_artifacts(
     )
 
     if args.target_model:
-         target_model = AutoModel.from_pretrained(
-             args.target_model,
-             device_map={"": f"cuda:{rank}"},
-             quantization_config=(
-                 BitsAndBytesConfig(load_in_8bit=args.load_in_8bit)
-                 if args.load_in_8bit
-                 else None
-             ),
-             revision=args.target_revision,
-             torch_dtype=dtype,
-             token=args.hf_token,
-         )
+        target_model = AutoModel.from_pretrained(
+            args.target_model,
+            device_map={"": f"cuda:{rank}"},
+            quantization_config=(
+                BitsAndBytesConfig(load_in_8bit=args.load_in_8bit)
+                if args.load_in_8bit
+                else None
+            ),
+            revision=args.target_revision,
+            torch_dtype=dtype,
+            token=args.hf_token,
+        )
     else:
         target_model = None
-
 
     # For memmap-style datasets
     if args.dataset.endswith(".bin"):
