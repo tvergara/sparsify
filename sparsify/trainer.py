@@ -30,9 +30,11 @@ class Trainer:
         cfg: TrainConfig,
         dataset: HfDataset | MemmapDataset,
         model: PreTrainedModel,
+        target_model: PreTrainedModel | None = None,
     ):
         # Store the whole model, including any potential causal LM wrapper
         self.model = model
+        self.target_model = target_model
 
         if cfg.hookpoints:
             assert not cfg.layers, "Cannot specify both `hookpoints` and `layers`."
@@ -329,6 +331,7 @@ class Trainer:
         }
         maybe_wrapped: dict[str, DDP] | dict[str, SparseCoder] = {}
         module_to_name = {v: k for k, v in name_to_module.items()}
+        self.target_activations = ()
 
         def hook(module: nn.Module, inputs, outputs):
             aux_out = None
@@ -368,6 +371,10 @@ class Trainer:
             # Flatten the batch and sequence dimensions
             outputs = outputs.flatten(0, 1)
             inputs = inputs.flatten(0, 1) if self.cfg.sae.transcode else outputs
+
+            if self.target_model:
+                layer = int(name.split('.')[1]) + 1
+                outputs = self.target_activations[layer].flatten(0, 1)
 
             # On the first iteration, initialize the encoder and decoder biases
             raw = self.saes[name]
@@ -454,6 +461,10 @@ class Trainer:
                 if self.cfg.loss_fn == "kl"
                 else None
             )
+
+            if self.target_model:
+                with torch.no_grad():
+                    self.target_activations = self.target_model(x, output_hidden_states=True).hidden_states
 
             # Forward pass on the model to get the next batch of activations
             handles = [
