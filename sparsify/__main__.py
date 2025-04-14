@@ -30,7 +30,7 @@ class RunConfig(TrainConfig):
     """Name of the model to train."""
 
     dataset: str = field(
-        default="EleutherAI/fineweb-edu-dedup-10b",
+        default="EleutherAI/SmolLM2-135M-10B",
         positional=True,
     )
     """Path to the dataset to use for training."""

@@ -42,6 +42,8 @@ with torch.inference_mode():
 # Do stuff with the latent activations
 ```
 
+For use cases beyond collecting residual stream SAE activations, we recommend PyTorch hooks ([see examples](https://gist.github.com/luciaquirke/7105708dac0cfc632d68f33c79b59e5c).) 
+
 ## Training SAEs and transcoders
 
 To train SAEs from the command line, you can use the following command:
@@ -49,7 +51,7 @@ To train SAEs from the command line, you can use the following command:
 ```bash
 python -m sparsify EleutherAI/pythia-160m <optional dataset>
 ```
-By default, we use the `EleutherAI/fineweb-edu-dedup-10b` dataset for training, but you can use any dataset from the HuggingFace Hub, or any local dataset in HuggingFace format (the string is passed to `load_dataset` from the `datasets` library).
+By default, we use the `EleutherAI/SmolLM2-135M-10B` dataset for training, but you can use any dataset from the HuggingFace Hub, or any local dataset in HuggingFace format (the string is passed to `load_dataset` from the `datasets` library).
 
 The CLI supports all of the config options provided by the `TrainConfig` class. You can see them by running `python -m sparsify --help`.
 
@@ -65,7 +67,7 @@ from sparsify.data import chunk_and_tokenize
 
 MODEL = "HuggingFaceTB/SmolLM2-135M"
 dataset = load_dataset(
-    "EleutherAI/fineweb-edu-dedup-10b", split="train",
+    "EleutherAI/SmolLM2-135M-10B", split="train",
 )
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
 tokenized = chunk_and_tokenize(dataset, tokenizer)
